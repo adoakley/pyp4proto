@@ -114,32 +114,40 @@ async def run_command(loop, opts, cmd, *args):
     reader, writer = await asyncio.open_connection(**opts.server, loop=loop)
     sock = writer.get_extra_info('socket')
 
+    # The protocol message is intended to match what the official 2018.1 client
+    # does.  Many of the settings are hardcoded, with no indication of what
+    # behaviour they are intended to control.  It seems unlikely that settings
+    # not used by the official client will be tested, so it seems best to just
+    # do the same thing.
     await Message([], {
         b'func': b'protocol',
         b'host': opts.host.encode(),
-        b'enableStreams': b'',
-        b'api': b'99999',
-        b'expandAndmaps': b'',
         b'port': opts.server['port'].encode(),
         b'rcvbuf': b'%i' % sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF),
         b'sndbuf': b'%i' % sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF),
-        b'cmpfile': b'',
+
+        # from clientRunCommand
+        b'api': b'99999',
+        b'enableStreams': b'',
         b'enableGraph': b'',
-        b'client': b'81',
+        b'expandAndmaps': b'',
+
+        # from Client::Client
+        b'cmpfile': b'',
+        b'client': b'84',
     }).to_stream_writer(writer)
 
     await Message([arg.encode() for arg in args], {
         b'func': b'user-%s' % cmd.encode(),
-        b'prog': b'p4pyproto',
         b'client': opts.client.encode(),
-        b'os': b'UNIX',
         b'host': opts.host.encode(),
-        b'charset': b'1',
-        b'version': b'0',
-        b'clientCase': b'0',
-        b'autoLogin': b'',
         b'user': opts.user.encode(),
         b'cwd': opts.directory.encode(),
+        b'prog': b'p4pyproto',
+        b'version': b'0',
+        b'os': b'UNIX', # always UNIX to get consistent results
+        b'clientCase': b'0', # always UNIX case folding rules
+        b'charset': b'1', # always UTF-8
     }).to_stream_writer(writer)
 
     while True:
