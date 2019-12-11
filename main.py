@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from p4proto import Message
+from p4proto import Message, Environment
 
 import argparse
 import asyncio
@@ -9,25 +9,10 @@ import os
 
 def parse_server(server):
     # TODO: make this more similar to P4PORT parsing
-    if not server:
-        server = 'perforce:1666'
     host, _, port = server.rpartition(':')
     if not host:
         host = 'localhost'
     return {'host': host, 'port': port}
-
-def get_default_user():
-    # this sequence of calls matches what the official p4 client does
-    if os.name == 'nt':
-        user = os.environ.get('USERNAME')
-        if not user:
-            user = os.getlogin()
-    else:
-        user = os.environ.get('USER')
-        if not user:
-            import pwd
-            user = pwd.getpwuid(os.getuid()).pw_name
-    return user
 
 async def logging_proxy(loop, opts, local_port):
     async def handle_client(reader, writer):
@@ -51,7 +36,7 @@ async def logging_proxy(loop, opts, local_port):
     loop.create_task(
         asyncio.start_server(handle_client, port=local_port, loop=loop))
 
-async def run_command(loop, opts, cmd, *args):
+async def run_command(loop, opts, env, cmd, *args):
     reader, writer = await asyncio.open_connection(**opts.server, loop=loop)
     sock = writer.get_extra_info('socket')
 
@@ -115,15 +100,16 @@ if __name__ == "__main__":
     # https://bugs.python.org/issue33109
     subparsers.required = True
 
-    def run(opts):
+    def run(opts, env):
         loop = asyncio.get_event_loop()
-        loop.run_until_complete(run_command(loop, opts, opts.command, *opts.args))
+        loop.run_until_complete(
+            run_command(loop, opts, env, opts.command, *opts.args))
     parser_run = subparsers.add_parser('run')
     parser_run.add_argument('command')
     parser_run.add_argument('args', nargs=argparse.REMAINDER)
     parser_run.set_defaults(func=run)
 
-    def proxy(opts):
+    def proxy(opts, env):
         loop = asyncio.get_event_loop()
         loop.create_task(logging_proxy(loop, opts, opts.port))
         loop.run_forever()
@@ -133,12 +119,16 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    args.server = parse_server(args.server)
-    if args.host is None:
-        args.host = socket.gethostname()
-    if args.client is None:
-        args.client = args.host
-    if args.user is None:
-        args.user = get_default_user()
+    env = Environment(args.directory)
 
-    args.func(args)
+    if not args.server:
+        args.server = env.get('P4PORT', 'perforce:1666')
+    if not args.host:
+        args.host = socket.gethostname()
+    if not args.client:
+        args.client = env.get('P4CLIENT', args.host)
+    if not args.user:
+        args.user = env.get_user()
+    args.server = parse_server(args.server)
+
+    args.func(args, env)

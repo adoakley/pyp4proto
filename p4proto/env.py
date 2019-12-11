@@ -17,7 +17,6 @@ def _loadconfig(filename, replacements):
                 if eq:
                     val = val.rstrip(" \n")
                     values[name] = _do_replacements(val, replacements)
-            pass
     except FileNotFoundError:
         pass
     return values
@@ -67,10 +66,19 @@ class Environment():
         if name in self._values:
             return self._values[name]
         env = _getenv(name, self._home)
-        if env is not None:
+        if env:
             self._values[name] = env
             return env
         return default
+
+    def get_user(self):
+        user = self.get('P4USER')
+        if not user:
+            user = self.get('USER')
+            if not user:
+                import pwd
+                user = pwd.getpwuid(os.getuid()).pw_name
+        return user
 
 if __name__ == "__main__":
     print(Environment(os.getcwd())._values)
