@@ -15,14 +15,20 @@ def parse_server(server):
     return {'host': host, 'port': port}
 
 async def logging_proxy(loop, opts, local_port):
+    count = 0
+
     async def handle_client(reader, writer):
+        nonlocal count
+
         # connect to upstream
         (upstream_reader, upstream_writer) = await asyncio.open_connection(
             **opts.server, loop=loop)
 
         # forward data between the two, with logging
-        loop.create_task(log_and_forward(">", reader, upstream_writer))
-        loop.create_task(log_and_forward("<", upstream_reader, writer))
+        print("new connection")
+        loop.create_task(log_and_forward("{}>".format(count), reader, upstream_writer))
+        loop.create_task(log_and_forward("{}<".format(count), upstream_reader, writer))
+        count = count + 1
 
     async def log_and_forward(log_prefix, reader, writer):
         while True:
