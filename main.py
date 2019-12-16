@@ -33,7 +33,7 @@ async def logging_proxy(server, local_port):
                 writer.close()
                 return
             print(log_prefix, msg)
-            await msg.to_stream_writer(writer)
+            msg.to_stream_writer(writer)
 
     loop.create_task(
         asyncio.start_server(handle_client, port=local_port))
@@ -48,7 +48,7 @@ async def run_command(env, cmd, *args):
     # behaviour they are intended to control.  It seems unlikely that settings
     # not used by the official client will be tested, so it seems best to just
     # do the same thing.
-    await Message([], {
+    Message([], {
         b'func': b'protocol',
         b'host': env.get('P4HOST').encode(),
         b'port': server['port'].encode(),
@@ -66,7 +66,7 @@ async def run_command(env, cmd, *args):
         b'client': b'84',
     }).to_stream_writer(writer)
 
-    await Message([arg.encode() for arg in args], {
+    Message([arg.encode() for arg in args], {
         b'func': b'user-%s' % cmd.encode(),
         b'client': env.get('P4CLIENT').encode(),
         b'host': env.get('P4HOST').encode(),
@@ -85,7 +85,7 @@ async def run_command(env, cmd, *args):
             break
         print("<", msg)
         if msg.syms[b'func'] == b'release':
-            await Message([], {
+            Message([], {
                 b'func': b'release2',
             }).to_stream_writer(writer)
             break

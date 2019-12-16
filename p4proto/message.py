@@ -49,7 +49,7 @@ class Message:
 
         return Message(args, syms)
 
-    async def to_stream_writer(self, writer):
+    def to_stream_writer(self, writer):
         body = b''
         for value in self.args:
             body = body + b'\0' + \
