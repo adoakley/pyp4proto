@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from p4proto import Environment, Message, parse_p4port
+from p4proto import Environment, Message, connect, parse_p4port
 
 import argparse
 import asyncio
@@ -39,56 +39,8 @@ async def logging_proxy(server, local_port):
         asyncio.start_server(handle_client, port=local_port))
 
 async def run_command(env, cmd, *args):
-    server = parse_p4port(env.get('P4PORT'))
-    reader, writer = await asyncio.open_connection(**server)
-    sock = writer.get_extra_info('socket')
-
-    # The protocol message is intended to match what the official 2018.1 client
-    # does.  Many of the settings are hardcoded, with no indication of what
-    # behaviour they are intended to control.  It seems unlikely that settings
-    # not used by the official client will be tested, so it seems best to just
-    # do the same thing.
-    Message([], {
-        b'func': b'protocol',
-        b'host': env.get('P4HOST').encode(),
-        b'port': server['port'].encode(),
-        b'rcvbuf': b'%i' % sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF),
-        b'sndbuf': b'%i' % sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF),
-
-        # from clientRunCommand
-        b'api': b'99999',
-        b'enableStreams': b'',
-        b'enableGraph': b'',
-        b'expandAndmaps': b'',
-
-        # from Client::Client
-        b'cmpfile': b'',
-        b'client': b'84',
-    }).to_stream_writer(writer)
-
-    Message([arg.encode() for arg in args], {
-        b'func': b'user-%s' % cmd.encode(),
-        b'client': env.get('P4CLIENT').encode(),
-        b'host': env.get('P4HOST').encode(),
-        b'user': env.get('P4USER').encode(),
-        b'cwd': env.cwd.encode(),
-        b'prog': b'p4pyproto',
-        b'version': b'0',
-        b'os': b'UNIX', # always UNIX to get consistent results
-        b'clientCase': b'0', # always UNIX case folding rules
-        b'charset': b'1', # always UTF-8
-    }).to_stream_writer(writer)
-
-    while True:
-        msg = await Message.from_stream_reader(reader)
-        if msg is None:
-            break
-        print("<", msg)
-        if msg.syms[b'func'] == b'release':
-            Message([], {
-                b'func': b'release2',
-            }).to_stream_writer(writer)
-            break
+    connection = await connect(env)
+    await connection.run(cmd, *args),
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
