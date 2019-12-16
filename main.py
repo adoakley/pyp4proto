@@ -1,28 +1,24 @@
 #!/usr/bin/env python3
 
-from p4proto import Message, Environment
+from p4proto import Environment, Message, parse_p4port
 
 import argparse
 import asyncio
 import socket
 import os
 
-def parse_server(server):
-    # TODO: make this more similar to P4PORT parsing
-    host, _, port = server.rpartition(':')
-    if not host:
-        host = 'localhost'
-    return {'host': host, 'port': port}
-
-async def logging_proxy(loop, opts, local_port):
+async def logging_proxy(server, local_port):
     count = 0
+
+    loop = asyncio.get_event_loop()
+    server = parse_p4port(server)
 
     async def handle_client(reader, writer):
         nonlocal count
 
         # connect to upstream
         (upstream_reader, upstream_writer) = await asyncio.open_connection(
-            **opts.server, loop=loop)
+            **server)
 
         # forward data between the two, with logging
         print("new connection")
@@ -40,10 +36,11 @@ async def logging_proxy(loop, opts, local_port):
             await msg.to_stream_writer(writer)
 
     loop.create_task(
-        asyncio.start_server(handle_client, port=local_port, loop=loop))
+        asyncio.start_server(handle_client, port=local_port))
 
-async def run_command(loop, opts, env, cmd, *args):
-    reader, writer = await asyncio.open_connection(**opts.server, loop=loop)
+async def run_command(env, cmd, *args):
+    server = parse_p4port(env.get('P4PORT'))
+    reader, writer = await asyncio.open_connection(**server)
     sock = writer.get_extra_info('socket')
 
     # The protocol message is intended to match what the official 2018.1 client
@@ -53,8 +50,8 @@ async def run_command(loop, opts, env, cmd, *args):
     # do the same thing.
     await Message([], {
         b'func': b'protocol',
-        b'host': opts.host.encode(),
-        b'port': opts.server['port'].encode(),
+        b'host': env.get('P4HOST').encode(),
+        b'port': server['port'].encode(),
         b'rcvbuf': b'%i' % sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF),
         b'sndbuf': b'%i' % sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF),
 
@@ -71,10 +68,10 @@ async def run_command(loop, opts, env, cmd, *args):
 
     await Message([arg.encode() for arg in args], {
         b'func': b'user-%s' % cmd.encode(),
-        b'client': opts.client.encode(),
-        b'host': opts.host.encode(),
-        b'user': opts.user.encode(),
-        b'cwd': opts.directory.encode(),
+        b'client': env.get('P4CLIENT').encode(),
+        b'host': env.get('P4HOST').encode(),
+        b'user': env.get('P4USER').encode(),
+        b'cwd': env.cwd.encode(),
         b'prog': b'p4pyproto',
         b'version': b'0',
         b'os': b'UNIX', # always UNIX to get consistent results
@@ -95,10 +92,10 @@ async def run_command(loop, opts, env, cmd, *args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--server', default=os.environ.get('P4PORT'))
-    parser.add_argument('--client', default=os.environ.get('P4CLIENT'))
-    parser.add_argument('--host', default=os.environ.get('P4HOST'))
-    parser.add_argument('--user', default=os.environ.get('P4USER'))
+    parser.add_argument('--server', dest='P4PORT')
+    parser.add_argument('--host', dest='P4HOST')
+    parser.add_argument('--client', dest='P4CLIENT')
+    parser.add_argument('--user', dest='P4USER')
     parser.add_argument('--directory', default=os.getcwd())
 
     subparsers = parser.add_subparsers(dest='command')
@@ -109,7 +106,7 @@ if __name__ == "__main__":
     def run(opts, env):
         loop = asyncio.get_event_loop()
         loop.run_until_complete(
-            run_command(loop, opts, env, opts.command, *opts.args))
+            run_command(env, opts.command, *opts.args))
     parser_run = subparsers.add_parser('run')
     parser_run.add_argument('command')
     parser_run.add_argument('args', nargs=argparse.REMAINDER)
@@ -117,24 +114,15 @@ if __name__ == "__main__":
 
     def proxy(opts, env):
         loop = asyncio.get_event_loop()
-        loop.create_task(logging_proxy(loop, opts, opts.port))
+        loop.create_task(logging_proxy(env.get('P4PORT'), opts.port))
         loop.run_forever()
     parser_proxy = subparsers.add_parser('proxy')
     parser_proxy.add_argument('port')
     parser_proxy.set_defaults(func=proxy)
 
     args = parser.parse_args()
-
-    env = Environment(args.directory)
-
-    if not args.server:
-        args.server = env.get('P4PORT', 'perforce:1666')
-    if not args.host:
-        args.host = socket.gethostname()
-    if not args.client:
-        args.client = env.get('P4CLIENT', args.host)
-    if not args.user:
-        args.user = env.get_user()
-    args.server = parse_server(args.server)
-
+    env = Environment(
+        args.directory,
+        {k: v for (k, v) in vars(args).items()
+            if k.startswith('P4') and v is not None})
     args.func(args, env)
