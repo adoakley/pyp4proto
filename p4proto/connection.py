@@ -3,6 +3,7 @@ import collections
 import socket
 import os
 
+from . import commands
 from .message import Message
 from .env import parse_p4port
 
@@ -15,13 +16,12 @@ class Connection():
     Command = collections.namedtuple('Command', ['cmd', 'args', 'future'])
 
     def __init__(self, env):
-        self._env = env
+        self.env = env
 
         self._server = parse_p4port(env.get('P4PORT'))
         self._host = env.get('P4HOST')
         self._client = env.get('P4CLIENT')
         self._user = env.get('P4USER')
-        self._cwd = env.cwd
 
     async def connect(self):
         self._loop = asyncio.get_event_loop()
@@ -30,7 +30,7 @@ class Connection():
 
         self._reader, self._writer = await asyncio.open_connection(
                 **self._server)
-        sock = self._writer.get_extra_info('socket')
+        self.sock = self._writer.get_extra_info('socket')
 
         # The protocol message is intended to match what the official 2018.1
         # client does.  Many of the settings are hardcoded, with no indication
@@ -41,9 +41,9 @@ class Connection():
             b'func': b'protocol',
             b'host': self._host.encode(),
             b'port': self._server['port'].encode(),
-            b'rcvbuf': b'%i' % sock.getsockopt(
+            b'rcvbuf': b'%i' % self.sock.getsockopt(
                     socket.SOL_SOCKET, socket.SO_RCVBUF),
-            b'sndbuf': b'%i' % sock.getsockopt(
+            b'sndbuf': b'%i' % self.sock.getsockopt(
                     socket.SOL_SOCKET, socket.SO_RCVBUF),
 
             b'api': b'99999',
@@ -66,7 +66,7 @@ class Connection():
                 b'client': self._client.encode(),
                 b'host': self._host.encode(),
                 b'user': self._user.encode(),
-                b'cwd': self._cwd.encode(),
+                b'cwd': self.env.cwd.encode(),
                 b'prog': b'p4pyproto',
                 b'version': b'0',
                 b'os': b'UNIX', # always UNIX to get consistent results
@@ -93,6 +93,8 @@ class Connection():
                 msg.syms[b'func'] = b'flush2'
                 msg.to_stream_writer(self._writer)
             # TODO: compress/compress2, echo (maybe)
+            elif func == b'client-Crypto':
+                commands.client_crypto(self, msg)
             else:
                 print("<", msg)
 
@@ -111,3 +113,6 @@ class Connection():
         async def wait_for_command():
             await command.future
         return wait_for_command()
+
+    def write_message(self, message):
+        message.to_stream_writer(self._writer)

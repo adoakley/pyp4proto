@@ -94,6 +94,20 @@ class Environment():
     def get(self, name, default=None):
         return self._values.get(name, default)
 
+    def get_ticket(self, server, user):
+        try:
+            with open(self.get('P4TICKETS'), 'rb') as f:
+                for line in f:
+                    name, sep, val = line.partition(b'=')
+                    if not sep or name != server:
+                        continue
+                    name, sep, val = val.partition(b':')
+                    if not sep or name != user:
+                        continue
+                    return val.rstrip(b'\n')
+        except FileNotFoundError:
+            pass
+        return None
 
 if __name__ == '__main__':
     print(Environment(os.getcwd())._values)
