@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 
-from p4proto import Environment, Message, connect, parse_p4port
-
 import argparse
 import asyncio
 import socket
 import os
+import p4proto
 
 async def logging_proxy(server, local_port):
     count = 0
 
     loop = asyncio.get_event_loop()
-    server = parse_p4port(server)
+    server = p4proto.parse_p4port(server)
 
     async def handle_client(reader, writer):
         nonlocal count
@@ -28,7 +27,7 @@ async def logging_proxy(server, local_port):
 
     async def log_and_forward(log_prefix, reader, writer):
         while True:
-            msg = await Message.from_stream_reader(reader)
+            msg = await p4proto.Message.from_stream_reader(reader)
             if msg is None:
                 writer.close()
                 return
@@ -39,7 +38,7 @@ async def logging_proxy(server, local_port):
         asyncio.start_server(handle_client, port=local_port))
 
 async def run_command(env, cmd, *args):
-    connection = await connect(env)
+    connection = await p4proto.connect(env)
     await connection.run(cmd, *args),
 
 if __name__ == "__main__":
@@ -73,7 +72,7 @@ if __name__ == "__main__":
     parser_proxy.set_defaults(func=proxy)
 
     args = parser.parse_args()
-    env = Environment(
+    env = p4proto.Environment(
         args.directory,
         {k: v for (k, v) in vars(args).items()
             if k.startswith('P4') and v is not None})
