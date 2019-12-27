@@ -2,6 +2,41 @@ from .env import Environment
 from .message import Message
 import hashlib, re, socket
 
+expand_string_pattern = re.compile(rb"""
+    (?: %' (?P<raw>.*?) '% ) |
+    (?:
+        \[
+            (?P<pre>[^[%]*)
+            % (?P<var>[^%]*) %
+            (?P<post>[^]|]*)
+            (?: | (?P<alt>[^]]*) )?
+        \]
+    ) |
+    (?: % (?P<simple>[^%]*) %)""", re.VERBOSE)
+def expand_string(string, values):
+    def do_replace(match):
+        raw = match['raw']
+        if raw is not None:
+            return raw
+
+        var = match['var']
+        if var is not None:
+            if var in values:
+                return b''.join([
+                    match['pre'] or b'',
+                    values[var],
+                    match['post'] or b''])
+            else:
+                return match['alt'] or b''
+
+        simple = match['simple']
+        if simple is not None:
+            if simple in values:
+                return values[simple]
+            else:
+                return b''
+    return expand_string_pattern.sub(do_replace, string)
+
 class BaseClientCommandHandler:
     async def onCrypto(self, conn, msg):
         daddr = 'unknown'
@@ -33,3 +68,9 @@ class BaseClientCommandHandler:
                 response[b'token2'] = passwords[1]
 
         conn.write_message(Message([], response))
+
+    async def onMessage(self, conn, msg):
+        code_it = msg.get_sym_list(b'code')
+        fmt_it = msg.get_sym_list(b'fmt')
+        for code, fmt in zip(code_it, fmt_it):
+            print(expand_string(fmt, msg.syms).decode())
