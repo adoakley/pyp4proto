@@ -1,5 +1,4 @@
 import asyncio
-import collections
 import socket
 import os
 
@@ -13,7 +12,22 @@ async def connect(env):
     return c
 
 class Connection():
-    Command = collections.namedtuple('Command', ['cmd', 'args', 'future'])
+    class Command:
+        def __init__(self, cmd, handler, args):
+            self.cmd = cmd
+            self.args = args
+            self.handler = handler
+
+            self._future = asyncio.get_event_loop().create_future()
+
+        async def call_handler(self, func, conn, msg):
+            await getattr(self.handler, 'on' + func.decode())(conn, msg)
+
+        def complete(self):
+            self._future.set_result(None)
+
+        async def wait_for_result(self):
+            return await self._future
 
     def __init__(self, env):
         self.env = env
@@ -60,9 +74,10 @@ class Connection():
 
     async def _process_commands(self):
         while True:
-            self._current_command = await self._command_queue.get()
-            Message([arg.encode() for arg in self._current_command.args], {
-                b'func': b'user-%s' % self._current_command.cmd.encode(),
+            command = await self._command_queue.get()
+            self._current_command = command
+            Message([arg.encode() for arg in command.args], {
+                b'func': b'user-%s' % command.cmd.encode(),
                 b'client': self._client.encode(),
                 b'host': self._host.encode(),
                 b'user': self._user.encode(),
@@ -73,7 +88,7 @@ class Connection():
                 b'clientCase': b'0', # always UNIX case folding rules
                 b'charset': b'1', # always UTF-8
             }).to_stream_writer(self._writer)
-            await self._current_command.future
+            await command.wait_for_result()
             self._command_queue.task_done()
             self._current_command = None
 
@@ -84,21 +99,22 @@ class Connection():
                 # TODO: signal somehow (exception?)
                 break
             func = msg.syms[b'func']
+            command = self._current_command
             if func == b'protocol':
                 continue
             elif func == b'release' or func == b'release2':
-                self._current_command.future.set_result(None)
+                command.complete()
                 continue
             elif func == b'flush1':
                 msg.syms[b'func'] = b'flush2'
                 msg.to_stream_writer(self._writer)
             # TODO: compress/compress2, echo (maybe)
-            elif func == b'client-Crypto':
-                commands.client_crypto(self, msg)
+            elif func.startswith(b'client-'):
+                await command.call_handler(func[len(b'client-'):], self, msg)
             else:
                 print("<", msg)
 
-    def run(self, cmd, *args):
+    def run(self, cmd, handler, *args):
         # Perforce doesn't support running multiple commands concurrently or
         # pipelining of commands.  To support that we would need multiple
         # connections to the server.
@@ -107,12 +123,9 @@ class Connection():
         # isn't currently running a command.  At the moment there is only one
         # connection, but there could be a pool.
 
-        command = Connection.Command(cmd, args, self._loop.create_future())
+        command = Connection.Command(cmd, handler, args)
         self._command_queue.put_nowait(command)
-
-        async def wait_for_command():
-            await command.future
-        return wait_for_command()
+        return command.wait_for_result()
 
     def write_message(self, message):
         message.to_stream_writer(self._writer)

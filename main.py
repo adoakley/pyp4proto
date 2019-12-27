@@ -39,7 +39,7 @@ async def logging_proxy(server, local_port):
 
 async def run_command(env, cmd, *args):
     connection = await p4proto.connect(env)
-    await connection.run(cmd, *args),
+    await connection.run(cmd, p4proto.BaseClientCommandHandler(), *args)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
