@@ -12,6 +12,15 @@ class Message:
         return '{}({!r}, {!r})'.format(
             self.__class__.__name__, self.args, self.syms)
 
+    def get_sym_list(self, name):
+        index = 0
+        while True:
+            prop = name + str(index).encode()
+            index = index + 1
+            if prop not in self.syms:
+                return
+            yield self.syms[prop]
+
     @staticmethod
     async def from_stream_reader(reader):
         # read header, handle closed connection gracefully
