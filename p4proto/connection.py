@@ -1,10 +1,12 @@
 import asyncio
+import collections
 import socket
 import os
 
 from . import commands
-from .message import Message
 from .env import parse_p4port
+from .error import ProtocolError
+from .message import Message
 
 async def connect(env):
     c = Connection(env)
@@ -18,13 +20,25 @@ class Connection():
             self.args = args
             self.handler = handler
 
+            self._exception = None
             self._future = asyncio.get_event_loop().create_future()
 
         async def call_handler(self, func, conn, msg):
-            await getattr(self.handler, 'on' + func.decode())(conn, msg)
+            fn = getattr(self.handler, 'on' + func.decode(), None)
+            if fn is None:
+                raise ProtocolError("unhandled client function {}".format(func))
+            else:
+                await getattr(self.handler, 'on' + func.decode())(conn, msg)
 
         def complete(self):
-            self._future.set_result(None)
+            if self._exception is None:
+                self._future.set_result(None)
+            else:
+                self._future.set_exception(self._exception)
+
+        def add_exception(self, e):
+            if self._exception is None:
+                self._exception = e
 
         async def wait_for_result(self):
             return await self._future
@@ -37,11 +51,12 @@ class Connection():
         self._client = env.get('P4CLIENT')
         self._user = env.get('P4USER')
 
-    async def connect(self):
         self._loop = asyncio.get_event_loop()
-        self._command_queue = asyncio.Queue()
+        self._command_queue = collections.deque()
         self._current_command = None
+        self._exceptions = []
 
+    async def connect(self):
         self._reader, self._writer = await asyncio.open_connection(
                 **self._server)
         self.sock = self._writer.get_extra_info('socket')
@@ -70,11 +85,10 @@ class Connection():
         }).to_stream_writer(self._writer)
 
         asyncio.ensure_future(self._read_messages())
-        asyncio.ensure_future(self._process_commands())
 
-    async def _process_commands(self):
-        while True:
-            command = await self._command_queue.get()
+    def _run_queued_command(self):
+        if self._command_queue and not self._current_command:
+            command = self._command_queue.pop()
             self._current_command = command
             Message([arg.encode() for arg in command.args], {
                 b'func': b'user-%s' % command.cmd.encode(),
@@ -88,9 +102,14 @@ class Connection():
                 b'clientCase': b'0', # always UNIX case folding rules
                 b'charset': b'1', # always UTF-8
             }).to_stream_writer(self._writer)
-            await command.wait_for_result()
-            self._command_queue.task_done()
-            self._current_command = None
+
+    def _complete_command(self):
+        command = self._current_command
+        self._current_command = None
+
+        command.complete()
+
+        self._run_queued_command()
 
     async def _read_messages(self):
         while True:
@@ -100,19 +119,26 @@ class Connection():
                 break
             func = msg.syms[b'func']
             command = self._current_command
-            if func == b'protocol':
-                continue
-            elif func == b'release' or func == b'release2':
-                command.complete()
-                continue
-            elif func == b'flush1':
-                msg.syms[b'func'] = b'flush2'
-                msg.to_stream_writer(self._writer)
-            # TODO: compress/compress2, echo (maybe)
-            elif func.startswith(b'client-'):
-                await command.call_handler(func[len(b'client-'):], self, msg)
-            else:
-                print("<", msg)
+            try:
+                if func == b'protocol':
+                    continue
+                elif func == b'release' or func == b'release2':
+                    self._complete_command()
+                    continue
+                elif func == b'flush1':
+                    msg.syms[b'func'] = b'flush2'
+                    msg.to_stream_writer(self._writer)
+                # TODO: compress/compress2, echo (maybe)
+                elif func.startswith(b'client-'):
+                    client_func = func[len(b'client-'):]
+                    await command.call_handler(client_func, self, msg)
+                else:
+                    raise ProtocolError("unhandled function {}".format(func))
+            except Exception as e:
+                if command:
+                    command.add_exception(e)
+                else:
+                    self._exceptions.append(e)
 
     def run(self, cmd, handler, *args):
         # Perforce doesn't support running multiple commands concurrently or
@@ -124,7 +150,14 @@ class Connection():
         # connection, but there could be a pool.
 
         command = Connection.Command(cmd, handler, args)
-        self._command_queue.put_nowait(command)
+        self._command_queue.appendleft(command)
+
+        if self._exceptions:
+            for e in self._exceptions:
+                command.add_exception(e)
+            self._exceptions = []
+
+        self._run_queued_command()
         return command.wait_for_result()
 
     def write_message(self, message):
