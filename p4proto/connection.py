@@ -15,9 +15,10 @@ async def connect(env):
 
 class Connection():
     class Command:
-        def __init__(self, cmd, handler, args):
+        def __init__(self, cmd, handler, args, syms):
             self.cmd = cmd
             self.args = args
+            self.syms = syms
             self.handler = handler
 
             self._exception = None
@@ -101,6 +102,7 @@ class Connection():
                 b'os': b'UNIX', # always UNIX to get consistent results
                 b'clientCase': b'0', # always UNIX case folding rules
                 b'charset': b'1', # always UTF-8
+                **command.syms,
             }).to_stream_writer(self._writer)
 
     def _complete_command(self):
@@ -140,7 +142,7 @@ class Connection():
                 else:
                     self._exceptions.append(e)
 
-    def run(self, cmd, handler, *args):
+    def run(self, cmd, handler, *args, **syms):
         # Perforce doesn't support running multiple commands concurrently or
         # pipelining of commands.  To support that we would need multiple
         # connections to the server.
@@ -149,7 +151,8 @@ class Connection():
         # isn't currently running a command.  At the moment there is only one
         # connection, but there could be a pool.
 
-        command = Connection.Command(cmd, handler, args)
+        command = Connection.Command(cmd, handler, args,
+                                     {k.encode(): v for k, v in syms.items()})
         self._command_queue.appendleft(command)
 
         if self._exceptions:

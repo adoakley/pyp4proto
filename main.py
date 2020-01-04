@@ -37,9 +37,9 @@ async def logging_proxy(server, local_port):
     loop.create_task(
         asyncio.start_server(handle_client, port=local_port))
 
-async def run_command(env, cmd, *args):
+async def run_command(env, cmd, *args, **syms):
     connection = await p4proto.connect(env)
-    await connection.run(cmd, p4proto.BaseClientCommandHandler(), *args)
+    await connection.run(cmd, p4proto.BaseClientCommandHandler(), *args, **syms)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
