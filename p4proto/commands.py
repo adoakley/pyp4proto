@@ -1,6 +1,6 @@
 from .env import Environment
 from .message import Message
-import hashlib, re, socket
+import hashlib, re, socket, sys
 
 expand_string_pattern = re.compile(rb"""
     (?: %' (?P<raw>.*?) '% ) |
@@ -38,6 +38,9 @@ def expand_string(string, values):
     return expand_string_pattern.sub(do_replace, string)
 
 class BaseClientCommandHandler:
+    def __init__(self, *, quiet=False):
+        self._quiet = quiet
+
     async def on_ipcfn_Crypto(self, conn, msg):
         daddr = 'unknown'
         if conn.sock.family == socket.AF_INET:
@@ -73,4 +76,13 @@ class BaseClientCommandHandler:
         code_it = msg.get_sym_list(b'code')
         fmt_it = msg.get_sym_list(b'fmt')
         for code, fmt in zip(code_it, fmt_it):
-            print(expand_string(fmt, msg.syms).decode())
+            severity = (int(code) >> 28) & ((1 << 4) - 1)
+            await self.on_message(
+                severity,
+                expand_string(fmt, msg.syms).decode())
+
+    async def on_message(self, severity, msg):
+        if severity >= 2:
+            print(msg, file=sys.stderr)
+        elif not self._quiet:
+            print(msg)
