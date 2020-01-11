@@ -24,11 +24,11 @@ class Connection():
             self._future = asyncio.get_event_loop().create_future()
 
         async def call_handler(self, func, conn, msg):
-            fn = getattr(self.handler, 'on' + func.decode(), None)
+            fn = getattr(self.handler, 'on_ipcfn_' + func.decode(), None)
             if fn is None:
                 raise ProtocolError("unhandled client function {}".format(func))
             else:
-                await getattr(self.handler, 'on' + func.decode())(conn, msg)
+                await fn(conn, msg)
 
         def complete(self):
             if self._exception is None:

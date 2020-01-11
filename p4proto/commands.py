@@ -38,7 +38,7 @@ def expand_string(string, values):
     return expand_string_pattern.sub(do_replace, string)
 
 class BaseClientCommandHandler:
-    async def onCrypto(self, conn, msg):
+    async def on_ipcfn_Crypto(self, conn, msg):
         daddr = 'unknown'
         if conn.sock.family == socket.AF_INET:
             daddr = '{peer[0]}:{peer[1]}'.format(peer=conn.sock.getpeername())
@@ -69,7 +69,7 @@ class BaseClientCommandHandler:
 
         conn.write_message(Message([], response))
 
-    async def onMessage(self, conn, msg):
+    async def on_ipcfn_Message(self, conn, msg):
         code_it = msg.get_sym_list(b'code')
         fmt_it = msg.get_sym_list(b'fmt')
         for code, fmt in zip(code_it, fmt_it):
