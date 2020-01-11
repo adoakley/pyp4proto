@@ -40,6 +40,7 @@ def expand_string(string, values):
 class BaseClientCommandHandler:
     def __init__(self, *, quiet=False):
         self._quiet = quiet
+        self._fstat_partial = {}
 
     async def on_ipcfn_Crypto(self, conn, msg):
         daddr = 'unknown'
@@ -86,3 +87,16 @@ class BaseClientCommandHandler:
             print(msg, file=sys.stderr)
         elif not self._quiet:
             print(msg)
+
+    async def on_ipcfn_FstatInfo(self, conn, msg):
+        self._fstat_partial.update(
+            {k: v for k, v in msg.syms.items() if k != b'func'})
+        await self.on_fstat_info(self._fstat_partial)
+        self._fstat_partial = {}
+
+    async def on_ipcfn_FstatPartial(self, conn, msg):
+        self._fstat_partial.update(
+            {k: v for k, v in msg.syms.items() if k != b'func'})
+
+    async def on_fstat_info(self, data):
+        pass
