@@ -14,36 +14,6 @@ async def connect(env):
     return c
 
 class Connection():
-    class Command:
-        def __init__(self, cmd, handler, args, syms):
-            self.cmd = cmd
-            self.args = args
-            self.syms = syms
-            self.handler = handler
-
-            self._exception = None
-            self._future = asyncio.get_event_loop().create_future()
-
-        async def call_handler(self, func, conn, msg):
-            fn = getattr(self.handler, 'on_ipcfn_' + func.decode(), None)
-            if fn is None:
-                raise ProtocolError("unhandled client function {}".format(func))
-            else:
-                await fn(conn, msg)
-
-        def complete(self):
-            if self._exception is None:
-                self._future.set_result(None)
-            else:
-                self._future.set_exception(self._exception)
-
-        def add_exception(self, e):
-            if self._exception is None:
-                self._exception = e
-
-        async def wait_for_result(self):
-            return await self._future
-
     def __init__(self, env):
         self.env = env
 
@@ -52,10 +22,7 @@ class Connection():
         self._client = env.get('P4CLIENT')
         self._user = env.get('P4USER')
 
-        self._loop = asyncio.get_event_loop()
-        self._command_queue = collections.deque()
-        self._current_command = None
-        self._exceptions = []
+        self._lock = asyncio.Lock()
 
     async def connect(self):
         self._reader, self._writer = await asyncio.open_connection(
@@ -85,14 +52,36 @@ class Connection():
             b'client': b'84',
         }).to_stream_writer(self._writer)
 
-        asyncio.ensure_future(self._read_messages())
+    async def _read_messages(self, handler):
+        while True:
+            msg = await Message.from_stream_reader(self._reader)
+            if msg is None:
+                # TODO: signal somehow (exception?)
+                break
+            func = msg.syms[b'func']
+            if func == b'protocol':
+                pass
+            elif func == b'release':
+                return
+            elif func == b'flush1':
+                msg.syms[b'func'] = b'flush2'
+                msg.to_stream_writer(self._writer)
+            # TODO: compress/compress2, echo (maybe)
+            elif func.startswith(b'client-'):
+                client_func = func[len(b'client-'):].decode()
+                fn = getattr(handler, 'on_ipcfn_' + client_func, None)
+                if fn is None:
+                    raise ProtocolError(
+                        "unhandled client function {}".format(client_func))
+                else:
+                    await fn(self, msg)
+            else:
+                raise ProtocolError("unhandled function {}".format(func))
 
-    def _run_queued_command(self):
-        if self._command_queue and not self._current_command:
-            command = self._command_queue.pop()
-            self._current_command = command
-            Message([arg.encode() for arg in command.args], {
-                b'func': b'user-%s' % command.cmd.encode(),
+    async def run(self, cmd, handler, *args, **syms):
+        async with self._lock:
+            Message([arg.encode() for arg in args], {
+                b'func': b'user-%s' % cmd.encode(),
                 b'client': self._client.encode(),
                 b'host': self._host.encode(),
                 b'user': self._user.encode(),
@@ -102,66 +91,9 @@ class Connection():
                 b'os': b'UNIX', # always UNIX to get consistent results
                 b'clientCase': b'0', # always UNIX case folding rules
                 b'charset': b'1', # always UTF-8
-                **command.syms,
+                **{k.encode(): v for k, v in syms.items()}
             }).to_stream_writer(self._writer)
-
-    def _complete_command(self):
-        command = self._current_command
-        self._current_command = None
-
-        command.complete()
-
-        self._run_queued_command()
-
-    async def _read_messages(self):
-        while True:
-            msg = await Message.from_stream_reader(self._reader)
-            if msg is None:
-                # TODO: signal somehow (exception?)
-                break
-            func = msg.syms[b'func']
-            command = self._current_command
-            try:
-                if func == b'protocol':
-                    continue
-                elif func == b'release' or func == b'release2':
-                    self._complete_command()
-                    continue
-                elif func == b'flush1':
-                    msg.syms[b'func'] = b'flush2'
-                    msg.to_stream_writer(self._writer)
-                # TODO: compress/compress2, echo (maybe)
-                elif func.startswith(b'client-'):
-                    client_func = func[len(b'client-'):]
-                    await command.call_handler(client_func, self, msg)
-                else:
-                    raise ProtocolError("unhandled function {}".format(func))
-            except Exception as e:
-                if command:
-                    command.add_exception(e)
-                else:
-                    self._exceptions.append(e)
-
-    def run(self, cmd, handler, *args, **syms):
-        # Perforce doesn't support running multiple commands concurrently or
-        # pipelining of commands.  To support that we would need multiple
-        # connections to the server.
-        #
-        # The commands are added to a queue and executed on a connection that
-        # isn't currently running a command.  At the moment there is only one
-        # connection, but there could be a pool.
-
-        command = Connection.Command(cmd, handler, args,
-                                     {k.encode(): v for k, v in syms.items()})
-        self._command_queue.appendleft(command)
-
-        if self._exceptions:
-            for e in self._exceptions:
-                command.add_exception(e)
-            self._exceptions = []
-
-        self._run_queued_command()
-        return command.wait_for_result()
+            await self._read_messages(handler)
 
     def write_message(self, message):
         message.to_stream_writer(self._writer)
